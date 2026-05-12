@@ -95,10 +95,10 @@
             renderProperty(ent, compKey, prop, comp, defaultComp, container) {
                 let type = typeof comp[prop];
                 let row = document.createElement('div');
-                row.className = "flex items-center gap-2 py-0.5";
+                row.className = "flex items-center gap-0.25 py-0.5";
 
                 let label = document.createElement('span');
-                label.className = "text-gray-400 text-[11px] capitalize w-20 shrink-0 truncate";
+                label.className = "text-gray-400 text-[11px] capitalize w-14 shrink-0 truncate";
                 label.innerText = prop.replace('AssetId', '');
 
                 // DRAG-TO-SLIDE for numbers
@@ -208,10 +208,10 @@
             renderScriptVariable(ent, compKey, sVar, comp, container) {
                 let type = typeof comp.scriptVariables[sVar];
                 let row = document.createElement('div');
-                row.className = "flex items-center gap-2 py-0.5";
+                row.className = "flex items-center gap-0.25 py-0.5";
 
                 let label = document.createElement('span');
-                label.className = "text-gray-400 text-[11px] capitalize w-20 shrink-0 truncate text-editor-accent";
+                label.className = "text-gray-400 text-[11px] capitalize w-15 shrink-0 truncate text-editor-accent";
                 label.innerText = sVar;
 
                 // DRAG-TO-SLIDE for numbers
