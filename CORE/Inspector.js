@@ -276,8 +276,11 @@
             },
 
             filterComponents() {
-                let q = document.getElementById('component-search').value.toLowerCase();
-                let list = document.getElementById('component-list');
+                const searchInput = document.getElementById('component-search');
+                const list = document.getElementById('component-list');
+                if (!searchInput || !list) return;   // ← safe early exit
+            
+                let q = searchInput.value.toLowerCase();
                 list.innerHTML = '';
                 Object.keys(ComponentRegistry).forEach(k => {
                     if (k === 'Transform' || !k.toLowerCase().includes(q)) return;
