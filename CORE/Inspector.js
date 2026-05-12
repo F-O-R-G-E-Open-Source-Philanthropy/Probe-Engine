@@ -401,6 +401,7 @@
         if (uploadInput) uploadInput.onchange = (e) => Inspector.handleImageUpload(e);
 
         Inspector.hookAddComponentButton();
+        EventBus.on('entitySelected', () => Inspector.render()); // Auto-render when an entity is selected
         console.log('[Inspector] Singleton installed');
     }
 
