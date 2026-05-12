@@ -1,10 +1,9 @@
 // Inspector.js – Core Inspector Singleton for Probe Engine
-// @version 1.0.0
+// @version 1.0.1
 // @description Handles the entire inspector panel UI and logic.
 // @author Forge™ Open Source Philanthropy
 
 (() => {
-    // Wait until globals are ready
     function initWhenReady() {
         if (typeof window.SceneManager === 'undefined' ||
             typeof window.UI === 'undefined' ||
@@ -17,7 +16,6 @@
         window.Inspector = {
             pendingAssetAssign: null,
 
-            // Render the entire inspector for the current selection
             render() {
                 const c = document.getElementById('inspector-content'),
                       f = document.getElementById('inspector-footer');
@@ -33,19 +31,16 @@
                 f.classList.remove('hidden');
 
                 const ent = SceneManager.entities.get(sel[0]);
-                // Entity name bar
                 let h = document.createElement('div');
                 h.className = "flex items-center gap-2 mb-2 shrink-0";
                 h.innerHTML = `<input type="checkbox" checked class="accent-editor-accent w-auto"> <input type="text" value="${escapeHtml(ent.name)}" class="font-bold text-sm bg-transparent border-b border-transparent focus:border-editor-accent" onchange="SceneManager.entities.get('${ent.id}').name = this.value; UI.renderHierarchy(); Persistence.debouncedSave()">`;
                 c.appendChild(h);
 
-                // Iterate components
                 for (let key in ent.components) {
                     this.renderComponent(ent, key);
                 }
             },
 
-            // Render a single component section
             renderComponent(ent, compKey) {
                 const c = document.getElementById('inspector-content');
                 const comp = ent.components[compKey];
@@ -56,7 +51,6 @@
                 let sec = document.createElement('div');
                 sec.className = "bg-[#2d2d2d] border border-editor-border rounded mb-2 overflow-hidden shrink-0";
 
-                // Header
                 let title = document.createElement('div');
                 title.className = "bg-editor-header px-2 py-1.5 font-bold flex justify-between items-center";
 
@@ -76,18 +70,15 @@
                 `;
                 sec.appendChild(title);
 
-                // Body
                 let body = document.createElement('div');
                 body.id = `inspector-body-${compKey}`;
                 body.className = `p-2 flex flex-col gap-1.5 ${isCollapsed ? 'hidden' : ''}`;
 
-                // -- Properties --
                 for (let prop in comp) {
                     if (['entity','type','uuid','scriptVariables','_forces','_collapsed'].includes(prop)) continue;
                     this.renderProperty(ent, compKey, prop, comp, defaultComp, body);
                 }
 
-                // -- Script Variables --
                 if (typeName === 'ScriptRef' && comp.scriptVariables && Object.keys(comp.scriptVariables).length > 0) {
                     let sep = document.createElement('div');
                     sep.className = "w-full h-px bg-editor-border my-1";
@@ -101,19 +92,50 @@
                 document.getElementById('inspector-content').appendChild(sec);
             },
 
-            // Render a single property row (improved layout)
             renderProperty(ent, compKey, prop, comp, defaultComp, container) {
                 let type = typeof comp[prop];
                 let row = document.createElement('div');
                 row.className = "flex items-center gap-2 py-0.5";
 
-                // Label (width fixed)
                 let label = document.createElement('span');
                 label.className = "text-gray-400 text-[11px] capitalize w-20 shrink-0 truncate";
                 label.innerText = prop.replace('AssetId', '');
+
+                // DRAG-TO-SLIDE for numbers
+                if (type === 'number') {
+                    label.classList.add('cursor-ew-resize', 'hover:text-white', 'text-editor-accent');
+                    label.title = "Drag to slide value";
+                    label.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        const startX = e.clientX;
+                        const startVal = comp[prop];
+                        const numberInput = document.getElementById(`inspector-${compKey}-${prop}`);
+                        const rangeInput = document.getElementById(`inspector-${compKey}-${prop}-range`);
+                        const onMove = (ev) => {
+                            const diff = ev.clientX - startX;
+                            let newVal = startVal + (diff * (ev.shiftKey ? 0.05 : 0.5));
+                            // clamp to min/max if defined
+                            if (rangeInput) {
+                                newVal = Math.max(parseFloat(rangeInput.min), Math.min(parseFloat(rangeInput.max), newVal));
+                            }
+                            comp[prop] = newVal;
+                            if (numberInput) numberInput.value = Number.isInteger(newVal) ? newVal : newVal.toFixed(2);
+                            if (rangeInput) rangeInput.value = newVal;
+                            SceneManager.rebuildQuadtree();
+                        };
+                        const onUp = () => {
+                            window.removeEventListener('mousemove', onMove);
+                            window.removeEventListener('mouseup', onUp);
+                            Persistence.debouncedSave();
+                            Inspector.render(); // refresh to sync
+                        };
+                        window.addEventListener('mousemove', onMove);
+                        window.addEventListener('mouseup', onUp);
+                    });
+                }
+
                 row.appendChild(label);
 
-                // Value area
                 let valueWrap = document.createElement('div');
                 valueWrap.className = "flex-1 flex items-center gap-2";
 
@@ -152,7 +174,7 @@
                     if (prop === 'rotation') { min = 0; max = 360; step = 1; }
                     let valStr = Number.isInteger(comp[prop]) ? comp[prop] : comp[prop].toFixed(2);
                     valueWrap.innerHTML = `
-                        <input id="${inputId}-range" type="range" class="flex-1 min-w-0 accent-editor-accent h-1.5 cursor-pointer" min="${min}" max="${max}" step="${step}" value="${valStr}" oninput="document.getElementById('${inputId}').value=this.value; ${updateFn}">
+                        <input id="${inputId}-range" type="range" class="flex-1 min-w-[80px] accent-editor-accent h-1.5 cursor-pointer" min="${min}" max="${max}" step="${step}" value="${valStr}" oninput="document.getElementById('${inputId}').value=this.value; ${updateFn}">
                         <input id="${inputId}" type="number" step="${step}" value="${valStr}" class="w-[60px] shrink-0 h-5 px-1 text-[11px] text-right bg-[#3c3c3c] border border-[#333] rounded editor-number-input" onchange="${updateFn}">
                     `;
                 }
@@ -167,7 +189,6 @@
                     }
                 }
 
-                // Reset button
                 let resetBtn = document.createElement('button');
                 resetBtn.className = "text-gray-500 hover:text-white shrink-0";
                 resetBtn.innerHTML = '<i class="fas fa-undo text-[9px]"></i>';
@@ -184,7 +205,6 @@
                 container.appendChild(row);
             },
 
-            // Render a public script variable (similar improved layout)
             renderScriptVariable(ent, compKey, sVar, comp, container) {
                 let type = typeof comp.scriptVariables[sVar];
                 let row = document.createElement('div');
@@ -193,6 +213,38 @@
                 let label = document.createElement('span');
                 label.className = "text-gray-400 text-[11px] capitalize w-20 shrink-0 truncate text-editor-accent";
                 label.innerText = sVar;
+
+                // DRAG-TO-SLIDE for numbers
+                if (type === 'number') {
+                    label.classList.add('cursor-ew-resize', 'hover:text-white');
+                    label.title = "Drag to slide value";
+                    label.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        const startX = e.clientX;
+                        const startVal = comp.scriptVariables[sVar];
+                        const numberInput = document.getElementById(`inspector-sv-${compKey}-${sVar}`);
+                        const rangeInput = document.getElementById(`inspector-sv-${compKey}-${sVar}-range`);
+                        const onMove = (ev) => {
+                            const diff = ev.clientX - startX;
+                            let newVal = startVal + (diff * (ev.shiftKey ? 0.05 : 0.5));
+                            if (rangeInput) {
+                                newVal = Math.max(parseFloat(rangeInput.min), Math.min(parseFloat(rangeInput.max), newVal));
+                            }
+                            comp.scriptVariables[sVar] = newVal;
+                            if (numberInput) numberInput.value = Number.isInteger(newVal) ? newVal : newVal.toFixed(2);
+                            if (rangeInput) rangeInput.value = newVal;
+                        };
+                        const onUp = () => {
+                            window.removeEventListener('mousemove', onMove);
+                            window.removeEventListener('mouseup', onUp);
+                            Persistence.debouncedSave();
+                            Inspector.render();
+                        };
+                        window.addEventListener('mousemove', onMove);
+                        window.addEventListener('mouseup', onUp);
+                    });
+                }
+
                 row.appendChild(label);
 
                 let valueWrap = document.createElement('div');
@@ -205,7 +257,7 @@
                     let min = -2000, max = 2000, step = 0.1;
                     let valStr = Number.isInteger(comp.scriptVariables[sVar]) ? comp.scriptVariables[sVar] : comp.scriptVariables[sVar].toFixed(2);
                     valueWrap.innerHTML = `
-                        <input id="${inputId}-range" type="range" class="flex-1 min-w-0 accent-editor-accent h-1.5 cursor-pointer" min="${min}" max="${max}" step="${step}" value="${valStr}" oninput="document.getElementById('${inputId}').value=this.value; ${updateFn}">
+                        <input id="${inputId}-range" type="range" class="flex-1 min-w-[80px] accent-editor-accent h-1.5 cursor-pointer" min="${min}" max="${max}" step="${step}" value="${valStr}" oninput="document.getElementById('${inputId}').value=this.value; ${updateFn}">
                         <input id="${inputId}" type="number" step="${step}" value="${valStr}" class="w-[60px] shrink-0 h-5 px-1 text-[11px] text-right bg-[#3c3c3c] border border-[#333] rounded editor-number-input" onchange="${updateFn}">`;
                 }
                 else if (type === 'boolean') {
@@ -278,8 +330,8 @@
             filterComponents() {
                 const searchInput = document.getElementById('component-search');
                 const list = document.getElementById('component-list');
-                if (!searchInput || !list) return;   // ← safe early exit
-            
+                if (!searchInput || !list) return;
+
                 let q = searchInput.value.toLowerCase();
                 list.innerHTML = '';
                 Object.keys(ComponentRegistry).forEach(k => {
@@ -339,7 +391,6 @@
                         let c = SceneManager.entities.get(entId).components[compKey];
                         c[prop] = item.id;
                         if (assetType === 'script') {
-                            // parse public variables
                             let scriptCode = item.data;
                             let className = item.name.split('.')[0];
                             try {
@@ -362,7 +413,6 @@
                     list.appendChild(div);
                 });
 
-                // None option
                 let noneDiv = document.createElement('div');
                 noneDiv.className = "flex flex-col items-center p-2 border border-editor-border hover:border-editor-accent rounded cursor-pointer bg-editor-bg";
                 noneDiv.innerHTML = `<i class="fas fa-times text-4xl text-gray-500 mb-2 mt-1"></i><span class="text-[10px] w-full truncate text-center">None</span>`;
@@ -379,15 +429,12 @@
                 document.getElementById('asset-selector-modal').classList.remove('hidden');
             },
 
-            // Hook into the existing UI toggle for add component
             hookAddComponentButton() {
                 const btn = document.querySelector('#inspector-footer button');
                 if (btn) btn.onclick = () => Inspector.toggleAddComponentMenu();
             }
         };
 
-        // Attach to the engine
-        // Replace UI.renderInspector and UI.updateInspectorLive
         UI.renderInspector = () => Inspector.render();
         UI.updateInspectorLive = (ent) => Inspector.updateLive(ent);
         UI.toggleAddComponentMenu = () => Inspector.toggleAddComponentMenu();
@@ -396,12 +443,11 @@
         UI.handleInspectorImageUpload = (e) => Inspector.handleImageUpload(e);
         UI.openAssetSelector = (a,b,c,d) => Inspector.openAssetSelector(a,b,c,d);
 
-        // Override the file input handler
         const uploadInput = document.getElementById('inspector-image-upload');
         if (uploadInput) uploadInput.onchange = (e) => Inspector.handleImageUpload(e);
 
         Inspector.hookAddComponentButton();
-        EventBus.on('entitySelected', () => Inspector.render()); // Auto-render when an entity is selected
+        EventBus.on('entitySelected', () => Inspector.render());
         console.log('[Inspector] Singleton installed');
     }
 
