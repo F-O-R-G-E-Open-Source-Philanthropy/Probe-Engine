@@ -1,7 +1,8 @@
 // Compiler.js - Probe Engine Game Compiler Singleton
-// @version 1.0.0
+// @version 1.2.1
 // @developer Probe Engine Team
-// @description Compiles Probe Engine projects into standalone HTML5 games with splash screen, scene switching, and platform installers.
+// @description Compiles Probe Engine projects into standalone HTML5 games
+//              with cinematic splash, scene switching, and platform installers.
 
 (function () {
     'use strict';
@@ -14,52 +15,90 @@
         compile: async function (exportData, currentEngineHtml) {
             console.log('[ProbeCompiler] Compiling game:', exportData.appName);
 
-            try {
-                // Fetch the yellow satellite PNG and convert to base64
-                let logoDataUrl = null;
+            // --- 1. Validate every selected scene has a Camera2D ---
+            const sceneIds = exportData.scenes || [];
+            if (sceneIds.length === 0) {
+                if (typeof window.Toast !== 'undefined' && window.Toast.show) {
+                    window.Toast.show('No scenes selected in Build Settings!', 'error');
+                }
+                return;
+            }
+
+            const assets = exportData.assets || {};
+            const missingCameraScenes = [];
+
+            sceneIds.forEach(sceneId => {
+                const sceneAsset = assets[sceneId];
+                if (!sceneAsset || sceneAsset.type !== 'scene') return;
                 try {
-                    const response = await fetch('https://raw.githubusercontent.com/F-O-R-G-E-Open-Source-Philanthropy/Probe-Engine/main/IMG%27s/yellow_satellite.png');
-                    if (response.ok) {
-                        const blob = await response.blob();
-                        logoDataUrl = await new Promise((resolve, reject) => {
-                            const reader = new FileReader();
-                            reader.onloadend = () => resolve(reader.result);
-                            reader.onerror = reject;
-                            reader.readAsDataURL(blob);
-                        });
-                    } else {
-                        console.warn('[ProbeCompiler] Could not fetch logo, proceeding without it.');
+                    const sceneData = JSON.parse(sceneAsset.data);
+                    const hasCamera = sceneData.entities && sceneData.entities.some(ent => {
+                        return ent.components && Object.values(ent.components).some(comp => comp.type === 'Camera2D');
+                    });
+                    if (!hasCamera) {
+                        missingCameraScenes.push(sceneAsset.name);
                     }
                 } catch (e) {
-                    console.warn('[ProbeCompiler] Logo fetch failed, proceeding without it.', e);
+                    missingCameraScenes.push(sceneAsset.name || sceneId);
                 }
+            });
 
-                const compiledHTML = this.buildStandaloneHTML(exportData, logoDataUrl);
-                this.triggerDownload(
-                    (exportData.appName || 'MyGame').replace(/[^a-zA-Z0-9_-]/g, '_') + '.html',
-                    compiledHTML,
-                    'text/html'
-                );
-
-                if (exportData.platforms && exportData.platforms.linux) {
-                    this.generateLinuxInstaller(exportData);
-                }
-                if (exportData.platforms && exportData.platforms.windows) {
-                    this.generateWindowsInstaller(exportData);
-                }
-
-                console.log('[ProbeCompiler] Compilation complete!');
+            if (missingCameraScenes.length > 0) {
                 if (typeof window.Toast !== 'undefined' && window.Toast.show) {
-                    window.Toast.show('Game exported successfully!', 'success');
+                    window.Toast.show(
+                        'Export blocked: The following scenes have no Camera2D:\n' +
+                        missingCameraScenes.join(', ') +
+                        '\nAdd a Camera2D to each scene before exporting.',
+                        'error'
+                    );
                 }
-            } catch (err) {
-                console.error('[ProbeCompiler] Compilation failed:', err);
-                if (typeof window.Toast !== 'undefined' && window.Toast.show) {
-                    window.Toast.show('Export failed: ' + err.message, 'error');
+                return;
+            }
+
+            // --- 2. Fetch the yellow satellite PNG and convert to base64 ---
+            let logoDataUrl = null;
+            try {
+                const response = await fetch('https://raw.githubusercontent.com/F-O-R-G-E-Open-Source-Philanthropy/Probe-Engine/main/IMG%27s/yellow_satellite.png');
+                if (response.ok) {
+                    const blob = await response.blob();
+                    logoDataUrl = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result);
+                        reader.onerror = reject;
+                        reader.readAsDataURL(blob);
+                    });
+                } else {
+                    console.warn('[ProbeCompiler] Could not fetch logo, proceeding without it.');
                 }
+            } catch (e) {
+                console.warn('[ProbeCompiler] Logo fetch failed, proceeding without it.', e);
+            }
+
+            // --- 3. Build the standalone HTML ---
+            const compiledHTML = this.buildStandaloneHTML(exportData, logoDataUrl);
+            this.triggerDownload(
+                (exportData.appName || 'MyGame').replace(/[^a-zA-Z0-9_-]/g, '_') + '.html',
+                compiledHTML,
+                'text/html'
+            );
+
+            // --- 4. Generate platform installers if requested ---
+            if (exportData.platforms && exportData.platforms.linux) {
+                this.generateLinuxInstaller(exportData);
+            }
+            if (exportData.platforms && exportData.platforms.windows) {
+                this.generateWindowsInstaller(exportData);
+            }
+
+            console.log('[ProbeCompiler] Compilation complete!');
+            if (typeof window.Toast !== 'undefined' && window.Toast.show) {
+                window.Toast.show('Game exported successfully!', 'success');
             }
         },
 
+        // ============================================================
+        //  BUILD THE STANDALONE HTML DOCUMENT
+        // ============================================================
         buildStandaloneHTML: function (exportData, logoDataUrl = null) {
             const appName = exportData.appName || 'My Game';
             const splashDuration = exportData.splashDuration || 3.0;
@@ -79,6 +118,7 @@
                 appIconDataURL = assets[appIconId].data || '';
             }
 
+            // Build scene data array (same as before)
             const sceneDataArray = [];
             const sceneNameMap = {};
             if (sceneIds.length > 0) {
@@ -100,6 +140,8 @@
                 });
             }
 
+            // This should never happen because we require at least one scene now,
+            // but we keep it as a fallback.
             if (sceneDataArray.length === 0) {
                 sceneDataArray.push({
                     _assetId: 'default',
@@ -118,11 +160,12 @@
                 hasCompanyLogo: !!companyLogoDataURL
             });
 
-            // Build the logo element: use the PNG base64 if available, otherwise show nothing
-            const logoHTML = logoDataUrl
-                ? `<img src="${logoDataUrl}" alt="Probe Engine" style="width:120px; height:120px; object-fit:contain;">`
+            // Logo image element (240x240)
+            const logoImgHTML = logoDataUrl
+                ? `<img src="${logoDataUrl}" alt="Probe Engine" style="width:100%; height:100%; object-fit:contain;">`
                 : '';
 
+            // Build the cinematic splash HTML
             const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -133,7 +176,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Segoe UI', system-ui, sans-serif; }
-        
+
         #game-canvas {
             display: block;
             width: 100%;
@@ -144,6 +187,7 @@
             z-index: 1;
         }
 
+        /* --- CINEMATIC SPLASH SCREEN --- */
         #splash-overlay {
             position: fixed;
             inset: 0;
@@ -159,37 +203,76 @@
             opacity: 0;
             pointer-events: none;
         }
-        .splash-probe-logo {
-            width: 120px;
-            height: 120px;
+
+        /* Logo container – the main logo slides in here */
+        .splash-logo-container {
+            width: 240px;
+            height: 240px;
+            position: relative;
+            transform: translateX(-100%) translateY(50%);
+            opacity: 0;
+            animation: logoSlideIn 1.2s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+        }
+        @keyframes logoSlideIn {
+            0%   { transform: translateX(-100%) translateY(50%); opacity: 0; }
+            100% { transform: translateX(0) translateY(0); opacity: 1; }
+        }
+
+        /* Main logo stays still after slide-in */
+        .logo-main {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
             display: flex;
             align-items: center;
             justify-content: center;
             filter: drop-shadow(0 0 30px rgba(14, 99, 156, 0.6));
-            animation: logo-pulse 2s ease-in-out infinite;
         }
-        .splash-probe-logo img {
+        .logo-main img {
             width: 100%;
             height: 100%;
             object-fit: contain;
         }
-        @keyframes logo-pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.08); }
+
+        /* Heartbeat duplicate – invisible until triggered */
+        .logo-heartbeat {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
         }
+        .logo-heartbeat img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .logo-heartbeat.active {
+            animation: heartbeatPulse 0.3s ease-out forwards;
+        }
+        @keyframes heartbeatPulse {
+            0%   { transform: scale(1); opacity: 1; }
+            50%  { transform: scale(1.8); opacity: 0.8; }
+            100% { transform: scale(2.5); opacity: 0; }
+        }
+
         .splash-probe-text {
             font-size: 32px;
             font-weight: 700;
             letter-spacing: 3px;
             color: #eab308;
             text-shadow: 0 0 20px rgba(234, 179, 8, 0.5);
-            animation: text-glow 2s ease-in-out infinite;
-            margin-top: 10px;
+            opacity: 0;
+            animation: fadeInText 0.6s ease-out 0.5s forwards;
+            margin-top: 15px;
         }
-        @keyframes text-glow {
-            0%, 100% { text-shadow: 0 0 20px rgba(234, 179, 8, 0.5); }
-            50% { text-shadow: 0 0 40px rgba(234, 179, 8, 0.8), 0 0 60px rgba(234, 179, 8, 0.4); }
+        @keyframes fadeInText {
+            to { opacity: 1; }
         }
+
         .splash-company-logo {
             max-width: 300px;
             max-height: 150px;
@@ -198,8 +281,9 @@
         }
         @keyframes fade-in-up {
             from { opacity: 0; transform: translateY(30px); }
-            to { opacity: 1; transform: translateY(0); }
+            to   { opacity: 1; transform: translateY(0); }
         }
+
         .splash-separator {
             width: 60px;
             height: 2px;
@@ -207,6 +291,7 @@
             border-radius: 1px;
             margin: 10px 0;
         }
+
         .splash-loader {
             margin-top: 30px;
             width: 200px;
@@ -214,6 +299,11 @@
             background: rgba(255,255,255,0.1);
             border-radius: 2px;
             overflow: hidden;
+            opacity: 0;
+            animation: fadeInLoader 0.5s ease-out 1.5s forwards;
+        }
+        @keyframes fadeInLoader {
+            to { opacity: 1; }
         }
         .splash-loader-bar {
             height: 100%;
@@ -223,13 +313,16 @@
         }
         @keyframes loader-progress {
             from { width: 0%; }
-            to { width: 100%; }
+            to   { width: 100%; }
         }
     </style>
 </head>
 <body>
     <div id="splash-overlay">
-        <div class="splash-probe-logo">${logoHTML}</div>
+        <div class="splash-logo-container" id="splash-logo-container">
+            <div class="logo-main">${logoImgHTML}</div>
+            <div class="logo-heartbeat" id="logo-heartbeat">${logoImgHTML}</div>
+        </div>
         <div class="splash-probe-text">Probe Engine</div>
         <div id="splash-company-section" style="display:none; flex-direction:column; align-items:center; gap:16px;">
             <div class="splash-separator"></div>
@@ -251,12 +344,16 @@ ${runtimeJS}
             return html;
         },
 
+        // ============================================================
+        //  BUILD THE RUNTIME ENGINE JAVASCRIPT
+        // ============================================================
         buildRuntimeEngine: function (assets, extensions, sceneDataArray, sceneNameMap, config) {
             const assetsJSON = JSON.stringify(assets);
             const extensionsJSON = JSON.stringify(extensions);
             const sceneDataArrayJSON = JSON.stringify(sceneDataArray);
             const sceneNameMapJSON = JSON.stringify(sceneNameMap);
 
+            // The runtime code now includes the updated cinematic SplashController
             const runtimeCode = `
 // ================================================================
 //  PROBE ENGINE RUNTIME - Compiled Game
@@ -350,8 +447,8 @@ ${runtimeJS}
         name: 'Default', entities: new Map(), rootEntities: [], quadtree: new QuadtreeNode({ x: -5000, y: -5000, w: 10000, h: 10000 }), _allSceneData: EMBEDDED_SCENES,
         clear: function() { this.entities.clear(); this.rootEntities = []; this.rebuildQuadtree(); },
         load: function(data) { this.clear(); if (data) this.name = data.name || 'Untitled'; if (data && data.entities) { var self = this; data.entities.forEach(function(edata) { var obj = GameObject.fromJSON(edata); self.entities.set(obj.id, obj); if (!obj.parent) self.rootEntities.push(obj.id); }); } this.rebuildQuadtree(); },
-        loadScene: function(sceneName) { var idx = SCENE_NAME_MAP[sceneName]; if (idx === undefined) return false; var sceneData = this._allSceneData[idx]; if (!sceneData) return false; this.entities.forEach(function(e) { e.scriptInstances = {}; }); this.load(sceneData); window._currentSceneIndex = idx; return true; },
-        loadSceneByIndex: function(idx) { if (idx < 0 || idx >= this._allSceneData.length) return false; var sceneData = this._allSceneData[idx]; this.entities.forEach(function(e) { e.scriptInstances = {}; }); this.load(sceneData); window._currentSceneIndex = idx; return true; },
+        loadScene: function(sceneName) { var idx = SCENE_NAME_MAP[sceneName]; if (idx === undefined) return false; var sceneData = this._allSceneData[idx]; if (!sceneData) return false; this.entities.forEach(function(e) { e.scriptInstances = {}; }); this.load(sceneData); window._currentSceneIndex = idx; console.log('[SceneManager] Loaded scene:', this.name); return true; },
+        loadSceneByIndex: function(idx) { if (idx < 0 || idx >= this._allSceneData.length) return false; var sceneData = this._allSceneData[idx]; this.entities.forEach(function(e) { e.scriptInstances = {}; }); this.load(sceneData); window._currentSceneIndex = idx; console.log('[SceneManager] Loaded scene:', this.name); return true; },
         getSceneNames: function() { return Object.keys(SCENE_NAME_MAP); },
         addEntity: function(name, parentId) { var obj = new GameObject(name); this.entities.set(obj.id, obj); if (parentId && this.entities.has(parentId)) { obj.parent = parentId; this.entities.get(parentId).children.push(obj.id); } else { this.rootEntities.push(obj.id); } this.rebuildQuadtree(); return obj; },
         rebuildQuadtree: function() { this.quadtree.clear(); var self = this; this.entities.forEach(function(e) { if (e.active) self.quadtree.insert({ bounds: e.getBounds(), entity: e }); }); }
@@ -402,17 +499,92 @@ ${runtimeJS}
     window.Probe = window.Probe || { modules: {} };
     window.Probe.registerModule = function(name, def) { window.Probe.modules[name] = def; if (def && def.init) try { def.init(window); } catch(e) {} };
 
-    const GameLoop = { isRunning: false, rafId: null, start: function() { if (this.isRunning) return; this.isRunning = true; var self = this; this.rafId = requestAnimationFrame(function(t) { self.tick(t); }); }, stop: function() { this.isRunning = false; if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; } }, tick: function(now) { if (!this.isRunning) return; Time.update(now); ExtensionsRuntime.updateAll(Time.deltaTime); ScriptEngine.updateAll(Time.deltaTime); GravitySystem.update(Time.deltaTime); SceneManager.entities.forEach(function(entity) { if (!entity.active) return; var rb = entity.GetComponent('Rigidbody2D'); if (rb && !rb.isKinematic) { if (rb._forces) { rb.velocity.x += (rb._forces.x / rb.mass) * Time.deltaTime; rb.velocity.y += (rb._forces.y / rb.mass) * Time.deltaTime; rb._forces.x = 0; rb._forces.y = 0; } entity.transform.x += rb.velocity.x * Time.deltaTime; entity.transform.y += rb.velocity.y * Time.deltaTime; } }); SceneManager.rebuildQuadtree(); PhysicsSystem.update(); Renderer.render(); Input.update(); var self = this; this.rafId = requestAnimationFrame(function(t) { self.tick(t); }); } };
+    // ================================================================
+    //  CINEMATIC SPLASH CONTROLLER
+    // ================================================================
+    const SplashController = {
+        init: function() {
+            var overlay = document.getElementById('splash-overlay');
+            var companySection = document.getElementById('splash-company-section');
+            var companyLogoImg = document.getElementById('splash-company-logo-img');
+            var config = GAME_CONFIG;
+            var totalDuration = config.splashDuration || 3.0;
 
-    const SplashController = { init: function() { var overlay = document.getElementById('splash-overlay'); var companySection = document.getElementById('splash-company-section'); var companyLogoImg = document.getElementById('splash-company-logo-img'); var config = GAME_CONFIG; var probeSplashDuration = 1.8; var totalDuration = config.splashDuration || 3.0; if (config.hasCompanyLogo && config.companyLogoDataURL) { companySection.style.display = 'flex'; companyLogoImg.src = config.companyLogoDataURL; companyLogoImg.style.display = 'block'; setTimeout(function() { document.getElementById('splash-probe-section').style.display = 'none'; companySection.style.display = 'flex'; }, probeSplashDuration * 1000); setTimeout(function() { SplashController.finish(overlay); }, totalDuration * 1000); } else { companySection.style.display = 'none'; setTimeout(function() { SplashController.finish(overlay); }, Math.max(probeSplashDuration, totalDuration) * 1000); } }, finish: function(overlay) { overlay.classList.add('fade-out'); window._splashDone = true; setTimeout(function() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 700); SplashController.startGame(); }, startGame: function() { ExtensionsRuntime.init(); if (EMBEDDED_SCENES.length > 0) { SceneManager.load(EMBEDDED_SCENES[0]); window._currentSceneIndex = 0; } Renderer.init(); Renderer.resize(); GameLoop.start(); } };
+            // 1. Wait for slide-in animation to end (1.2s) then trigger heartbeat
+            var logoContainer = document.getElementById('splash-logo-container');
+            if (logoContainer) {
+                logoContainer.addEventListener('animationend', function(e) {
+                    if (e.animationName === 'logoSlideIn') {
+                        // Trigger heartbeat on duplicate
+                        var heartbeat = document.getElementById('logo-heartbeat');
+                        if (heartbeat) {
+                            heartbeat.classList.add('active');
+                        }
+                        // After heartbeat (0.3s) + 0.5s delay = 0.8s, proceed
+                        setTimeout(function() {
+                            SplashController.showCompanyOrFinish(overlay, companySection, companyLogoImg, config, totalDuration);
+                        }, 800);
+                    }
+                });
+            } else {
+                // Fallback if no logo
+                setTimeout(function() {
+                    SplashController.showCompanyOrFinish(overlay, companySection, companyLogoImg, config, totalDuration);
+                }, 1200);
+            }
+        },
 
-    function boot() { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else SplashController.init(); }
+        showCompanyOrFinish: function(overlay, companySection, companyLogoImg, config, totalDuration) {
+            if (config.hasCompanyLogo && config.companyLogoDataURL) {
+                // Show company logo for the remaining time
+                companySection.style.display = 'flex';
+                companyLogoImg.src = config.companyLogoDataURL;
+                companyLogoImg.style.display = 'block';
+                setTimeout(function() {
+                    SplashController.finish(overlay);
+                }, totalDuration * 1000 - 1200); // 1200ms already spent on slide+heartbeat
+            } else {
+                // No company logo, fade out after a short hold
+                setTimeout(function() {
+                    SplashController.finish(overlay);
+                }, Math.max(0, totalDuration * 1000 - 1200));
+            }
+        },
+
+        finish: function(overlay) {
+            overlay.classList.add('fade-out');
+            window._splashDone = true;
+            setTimeout(function() {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            }, 700);
+            SplashController.startGame();
+        },
+
+        startGame: function() {
+            ExtensionsRuntime.init();
+            if (EMBEDDED_SCENES.length > 0) {
+                SceneManager.load(EMBEDDED_SCENES[0]);
+                window._currentSceneIndex = 0;
+                console.log('[Splash] Loaded initial scene:', SceneManager.name);
+            }
+            Renderer.init();
+            Renderer.resize();
+            GameLoop.start();
+        }
+    };
+
+    const GameLoop = { isRunning: false, rafId: null, start: function() { if (this.isRunning) return; this.isRunning = true; window._gameReady = true; var self = this; this.rafId = requestAnimationFrame(function(t) { self.tick(t); }); }, stop: function() { this.isRunning = false; if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; } }, tick: function(now) { if (!this.isRunning) return; Time.update(now); ExtensionsRuntime.updateAll(Time.deltaTime); ScriptEngine.updateAll(Time.deltaTime); GravitySystem.update(Time.deltaTime); SceneManager.entities.forEach(function(entity) { if (!entity.active) return; var rb = entity.GetComponent('Rigidbody2D'); if (rb && !rb.isKinematic) { if (rb._forces) { rb.velocity.x += (rb._forces.x / rb.mass) * Time.deltaTime; rb.velocity.y += (rb._forces.y / rb.mass) * Time.deltaTime; rb._forces.x = 0; rb._forces.y = 0; } entity.transform.x += rb.velocity.x * Time.deltaTime; entity.transform.y += rb.velocity.y * Time.deltaTime; } }); SceneManager.rebuildQuadtree(); PhysicsSystem.update(); Renderer.render(); Input.update(); var self = this; this.rafId = requestAnimationFrame(function(t) { self.tick(t); }); } };
+
+    function boot() { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { SplashController.init(); }); else SplashController.init(); }
     boot();
 })();`;
 
             return runtimeCode;
         },
 
+        // ============================================================
+        //  UTILITY: TRIGGER DOWNLOAD
+        // ============================================================
         triggerDownload: function (filename, content, mimeType) {
             const blob = new Blob([content], { type: mimeType });
             const url = URL.createObjectURL(blob);
@@ -425,10 +597,13 @@ ${runtimeJS}
             setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
         },
 
+        // ============================================================
+        //  LINUX INSTALLER (.sh)
+        // ============================================================
         generateLinuxInstaller: function (exportData) {
             const appName = exportData.appName || 'MyGame';
             const safeName = appName.replace(/[^a-zA-Z0-9_-]/g, '_');
-            const htmlContent = this.buildStandaloneHTML(exportData); // installers work without logo (will show empty)
+            const htmlContent = this.buildStandaloneHTML(exportData);
             const htmlBase64 = this.utf8ToBase64(htmlContent);
             const installerScript = `#!/bin/bash
 set -e
@@ -463,6 +638,9 @@ echo "✅ \\${APP_NAME} installed!"`;
             this.triggerDownload(safeName + '_install.sh', installerScript, 'application/x-sh');
         },
 
+        // ============================================================
+        //  WINDOWS INSTALLER (.bat)
+        // ============================================================
         generateWindowsInstaller: function (exportData) {
             const appName = exportData.appName || 'MyGame';
             const safeName = appName.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -492,6 +670,9 @@ echo %APP_NAME% installed successfully!`;
             this.triggerDownload(safeName + '_install.bat', installerScript, 'application/bat');
         },
 
+        // ============================================================
+        //  UTILITY FUNCTIONS
+        // ============================================================
         escapeHTML: function (str) { return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); },
         escapeJS: function (str) { return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"'); },
         utf8ToBase64: function (str) { const bytes = new TextEncoder().encode(str); let binary = ''; bytes.forEach(function (b) { binary += String.fromCharCode(b); }); return btoa(binary); }
