@@ -1,8 +1,9 @@
 // Compiler.js - Probe Engine Game Compiler Singleton
-// @version 1.2.1
+// @version 1.2.0
 // @developer Probe Engine Team
 // @description Compiles Probe Engine projects into standalone HTML5 games
 //              with cinematic splash, scene switching, and platform installers.
+//              Fixed Windows installer embedding, splash timing, and robust download.
 
 (function () {
     'use strict';
@@ -12,87 +13,91 @@
     // ============================================================
     window.ProbeCompiler = {
 
+        /**
+         * Main compilation entry point.
+         * @param {object} exportData - Build settings, assets, scenes, etc.
+         * @param {string} currentEngineHtml - Not used but kept for compatibility.
+         */
         compile: async function (exportData, currentEngineHtml) {
-            console.log('[ProbeCompiler] Compiling game:', exportData.appName);
+            console.log('[ProbeCompiler] Starting compilation for:', exportData.appName);
 
-            // --- 1. Validate every selected scene has a Camera2D ---
-            const sceneIds = exportData.scenes || [];
-            if (sceneIds.length === 0) {
-                if (typeof window.Toast !== 'undefined' && window.Toast.show) {
-                    window.Toast.show('No scenes selected in Build Settings!', 'error');
+            try {
+                // --- 1. Validate every selected scene has a Camera2D ---
+                const sceneIds = exportData.scenes || [];
+                if (sceneIds.length === 0) {
+                    this.showToast('No scenes selected in Build Settings!', 'error');
+                    return;
                 }
-                return;
-            }
 
-            const assets = exportData.assets || {};
-            const missingCameraScenes = [];
+                const assets = exportData.assets || {};
+                const missingCameraScenes = [];
 
-            sceneIds.forEach(sceneId => {
-                const sceneAsset = assets[sceneId];
-                if (!sceneAsset || sceneAsset.type !== 'scene') return;
-                try {
-                    const sceneData = JSON.parse(sceneAsset.data);
-                    const hasCamera = sceneData.entities && sceneData.entities.some(ent => {
-                        return ent.components && Object.values(ent.components).some(comp => comp.type === 'Camera2D');
-                    });
-                    if (!hasCamera) {
-                        missingCameraScenes.push(sceneAsset.name);
+                for (const sceneId of sceneIds) {
+                    const sceneAsset = assets[sceneId];
+                    if (!sceneAsset || sceneAsset.type !== 'scene') continue;
+                    try {
+                        const sceneData = JSON.parse(sceneAsset.data);
+                        const hasCamera = sceneData.entities && sceneData.entities.some(ent => {
+                            return ent.components && Object.values(ent.components).some(comp => comp.type === 'Camera2D');
+                        });
+                        if (!hasCamera) {
+                            missingCameraScenes.push(sceneAsset.name);
+                        }
+                    } catch (e) {
+                        missingCameraScenes.push(sceneAsset.name || sceneId);
                     }
-                } catch (e) {
-                    missingCameraScenes.push(sceneAsset.name || sceneId);
                 }
-            });
 
-            if (missingCameraScenes.length > 0) {
-                if (typeof window.Toast !== 'undefined' && window.Toast.show) {
-                    window.Toast.show(
+                if (missingCameraScenes.length > 0) {
+                    this.showToast(
                         'Export blocked: The following scenes have no Camera2D:\n' +
                         missingCameraScenes.join(', ') +
                         '\nAdd a Camera2D to each scene before exporting.',
                         'error'
                     );
+                    return;
                 }
-                return;
-            }
 
-            // --- 2. Fetch the yellow satellite PNG and convert to base64 ---
-            let logoDataUrl = null;
-            try {
-                const response = await fetch('https://raw.githubusercontent.com/F-O-R-G-E-Open-Source-Philanthropy/Probe-Engine/main/IMG%27s/yellow_satellite.png');
-                if (response.ok) {
-                    const blob = await response.blob();
-                    logoDataUrl = await new Promise((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onloadend = () => resolve(reader.result);
-                        reader.onerror = reject;
-                        reader.readAsDataURL(blob);
-                    });
-                } else {
-                    console.warn('[ProbeCompiler] Could not fetch logo, proceeding without it.');
+                // --- 2. Fetch the yellow satellite PNG and convert to base64 (optional) ---
+                let logoDataUrl = null;
+                try {
+                    const response = await fetch('https://raw.githubusercontent.com/F-O-R-G-E-Open-Source-Philanthropy/Probe-Engine/main/IMG%27s/yellow_satellite.png');
+                    if (response.ok) {
+                        const blob = await response.blob();
+                        logoDataUrl = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(blob);
+                        });
+                    } else {
+                        console.warn('[ProbeCompiler] Could not fetch logo, proceeding without it.');
+                    }
+                } catch (e) {
+                    console.warn('[ProbeCompiler] Logo fetch failed, proceeding without it.', e);
                 }
-            } catch (e) {
-                console.warn('[ProbeCompiler] Logo fetch failed, proceeding without it.', e);
-            }
 
-            // --- 3. Build the standalone HTML ---
-            const compiledHTML = this.buildStandaloneHTML(exportData, logoDataUrl);
-            this.triggerDownload(
-                (exportData.appName || 'MyGame').replace(/[^a-zA-Z0-9_-]/g, '_') + '.html',
-                compiledHTML,
-                'text/html'
-            );
+                // --- 3. Build the standalone HTML ---
+                const compiledHTML = this.buildStandaloneHTML(exportData, logoDataUrl);
+                this.triggerDownload(
+                    (exportData.appName || 'MyGame').replace(/[^a-zA-Z0-9_-]/g, '_') + '.html',
+                    compiledHTML,
+                    'text/html'
+                );
 
-            // --- 4. Generate platform installers if requested ---
-            if (exportData.platforms && exportData.platforms.linux) {
-                this.generateLinuxInstaller(exportData);
-            }
-            if (exportData.platforms && exportData.platforms.windows) {
-                this.generateWindowsInstaller(exportData);
-            }
+                // --- 4. Generate platform installers if requested ---
+                if (exportData.platforms && exportData.platforms.linux) {
+                    this.generateLinuxInstaller(exportData);
+                }
+                if (exportData.platforms && exportData.platforms.windows) {
+                    this.generateWindowsInstaller(exportData);
+                }
 
-            console.log('[ProbeCompiler] Compilation complete!');
-            if (typeof window.Toast !== 'undefined' && window.Toast.show) {
-                window.Toast.show('Game exported successfully!', 'success');
+                console.log('[ProbeCompiler] Compilation complete!');
+                this.showToast('Game exported successfully!', 'success');
+            } catch (err) {
+                console.error('[ProbeCompiler] Fatal error during compilation:', err);
+                this.showToast('Compilation failed: ' + err.message, 'error');
             }
         },
 
@@ -101,7 +106,7 @@
         // ============================================================
         buildStandaloneHTML: function (exportData, logoDataUrl = null) {
             const appName = exportData.appName || 'My Game';
-            const splashDuration = exportData.splashDuration || 3.0;
+            const splashDuration = Math.max(1.0, exportData.splashDuration || 3.0);
             const companyLogoId = exportData.companyLogoId || '';
             const appIconId = exportData.appIcon || '';
             const sceneIds = exportData.scenes || [];
@@ -118,7 +123,7 @@
                 appIconDataURL = assets[appIconId].data || '';
             }
 
-            // Build scene data array (same as before)
+            // Build scene data array
             const sceneDataArray = [];
             const sceneNameMap = {};
             if (sceneIds.length > 0) {
@@ -140,8 +145,7 @@
                 });
             }
 
-            // This should never happen because we require at least one scene now,
-            // but we keep it as a fallback.
+            // Fallback empty scene if none available
             if (sceneDataArray.length === 0) {
                 sceneDataArray.push({
                     _assetId: 'default',
@@ -163,7 +167,7 @@
             // Logo image element (240x240)
             const logoImgHTML = logoDataUrl
                 ? `<img src="${logoDataUrl}" alt="Probe Engine" style="width:100%; height:100%; object-fit:contain;">`
-                : '';
+                : '<div style="width:100%; height:100%; background:#0e639c; border-radius:50%;"></div>';
 
             // Build the cinematic splash HTML
             const html = `<!DOCTYPE html>
@@ -204,7 +208,6 @@
             pointer-events: none;
         }
 
-        /* Logo container – the main logo slides in here */
         .splash-logo-container {
             width: 240px;
             height: 240px;
@@ -218,7 +221,6 @@
             100% { transform: translateX(0) translateY(0); opacity: 1; }
         }
 
-        /* Main logo stays still after slide-in */
         .logo-main {
             position: absolute;
             top: 0; left: 0;
@@ -234,7 +236,6 @@
             object-fit: contain;
         }
 
-        /* Heartbeat duplicate – invisible until triggered */
         .logo-heartbeat {
             position: absolute;
             top: 0; left: 0;
@@ -500,7 +501,7 @@ ${runtimeJS}
     window.Probe.registerModule = function(name, def) { window.Probe.modules[name] = def; if (def && def.init) try { def.init(window); } catch(e) {} };
 
     // ================================================================
-    //  CINEMATIC SPLASH CONTROLLER
+    //  CINEMATIC SPLASH CONTROLLER (Fixed timing)
     // ================================================================
     const SplashController = {
         init: function() {
@@ -508,26 +509,25 @@ ${runtimeJS}
             var companySection = document.getElementById('splash-company-section');
             var companyLogoImg = document.getElementById('splash-company-logo-img');
             var config = GAME_CONFIG;
-            var totalDuration = config.splashDuration || 3.0;
+            var totalDuration = Math.max(1.2, config.splashDuration || 3.0); // ensure at least slide+heartbeat time
 
             // 1. Wait for slide-in animation to end (1.2s) then trigger heartbeat
             var logoContainer = document.getElementById('splash-logo-container');
             if (logoContainer) {
                 logoContainer.addEventListener('animationend', function(e) {
                     if (e.animationName === 'logoSlideIn') {
-                        // Trigger heartbeat on duplicate
                         var heartbeat = document.getElementById('logo-heartbeat');
                         if (heartbeat) {
                             heartbeat.classList.add('active');
                         }
-                        // After heartbeat (0.3s) + 0.5s delay = 0.8s, proceed
+                        // After heartbeat (0.3s) + 0.5s delay = 0.8s total, proceed
                         setTimeout(function() {
                             SplashController.showCompanyOrFinish(overlay, companySection, companyLogoImg, config, totalDuration);
                         }, 800);
                     }
                 });
             } else {
-                // Fallback if no logo
+                // Fallback if no logo container
                 setTimeout(function() {
                     SplashController.showCompanyOrFinish(overlay, companySection, companyLogoImg, config, totalDuration);
                 }, 1200);
@@ -535,19 +535,20 @@ ${runtimeJS}
         },
 
         showCompanyOrFinish: function(overlay, companySection, companyLogoImg, config, totalDuration) {
+            var elapsedBeforeCompany = 1200 + 800; // slide-in + heartbeat+delay = 2000ms? Actually 1200+800=2000
+            var remaining = Math.max(0, totalDuration * 1000 - elapsedBeforeCompany);
             if (config.hasCompanyLogo && config.companyLogoDataURL) {
-                // Show company logo for the remaining time
                 companySection.style.display = 'flex';
                 companyLogoImg.src = config.companyLogoDataURL;
                 companyLogoImg.style.display = 'block';
                 setTimeout(function() {
                     SplashController.finish(overlay);
-                }, totalDuration * 1000 - 1200); // 1200ms already spent on slide+heartbeat
+                }, remaining);
             } else {
                 // No company logo, fade out after a short hold
                 setTimeout(function() {
                     SplashController.finish(overlay);
-                }, Math.max(0, totalDuration * 1000 - 1200));
+                }, Math.max(0, remaining));
             }
         },
 
@@ -593,18 +594,21 @@ ${runtimeJS}
             a.download = filename;
             document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
-            setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 1000);
         },
 
         // ============================================================
-        //  LINUX INSTALLER (.sh)
+        //  LINUX INSTALLER (.sh) - self-contained
         // ============================================================
         generateLinuxInstaller: function (exportData) {
             const appName = exportData.appName || 'MyGame';
             const safeName = appName.replace(/[^a-zA-Z0-9_-]/g, '_');
             const htmlContent = this.buildStandaloneHTML(exportData);
             const htmlBase64 = this.utf8ToBase64(htmlContent);
+
             const installerScript = `#!/bin/bash
 set -e
 APP_NAME="${appName}"
@@ -615,7 +619,7 @@ BIN_PATH="$HOME/.local/bin/\\${SAFE_NAME}"
 
 mkdir -p "\\${INSTALL_DIR}" "$HOME/.local/share/applications" "$HOME/.local/bin"
 
-echo "\\${SAFE_NAME}.html being written..."
+# Write HTML file from base64
 echo "${htmlBase64}" | base64 -d > "\\${INSTALL_DIR}/\\${SAFE_NAME}.html"
 
 cat > "\\${DESKTOP_FILE}" << DESKTOPEOF
@@ -634,16 +638,20 @@ xdg-open "\\${INSTALL_DIR}/\\${SAFE_NAME}.html"
 BINEOF
 chmod +x "\\${BIN_PATH}"
 
-echo "✅ \\${APP_NAME} installed!"`;
+echo "✅ \\${APP_NAME} installed!"
+`;
             this.triggerDownload(safeName + '_install.sh', installerScript, 'application/x-sh');
         },
 
         // ============================================================
-        //  WINDOWS INSTALLER (.bat)
+        //  WINDOWS INSTALLER (.bat) - self-contained with base64 embedded
         // ============================================================
         generateWindowsInstaller: function (exportData) {
             const appName = exportData.appName || 'MyGame';
             const safeName = appName.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const htmlContent = this.buildStandaloneHTML(exportData);
+            const htmlBase64 = this.utf8ToBase64(htmlContent);
+
             const installerScript = `@echo off
 setlocal enabledelayedexpansion
 set "APP_NAME=${appName}"
@@ -655,28 +663,49 @@ set "START_MENU_DIR=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\%SAFE_N
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 if not exist "%START_MENU_DIR%" mkdir "%START_MENU_DIR%"
 
-if exist "%~dp0%SAFE_NAME%.html" (
-    copy /Y "%~dp0%SAFE_NAME%.html" "%INSTALL_DIR%\\%SAFE_NAME%.html"
-) else (
-    echo ERROR: %SAFE_NAME%.html not found alongside installer!
-    pause
-    exit /b 1
-)
+:: Decode base64 and write HTML file
+powershell -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${htmlBase64}')) | Out-File -Encoding UTF8 '%INSTALL_DIR%\\%SAFE_NAME%.html'"
 
 powershell -Command "$WS = New-Object -ComObject WScript.Shell; $SC = $WS.CreateShortcut('%DESKTOP_DIR%\\%APP_NAME%.lnk'); $SC.TargetPath = '%INSTALL_DIR%\\%SAFE_NAME%.html'; $SC.WorkingDirectory = '%INSTALL_DIR%'; $SC.Save()"
 powershell -Command "$WS = New-Object -ComObject WScript.Shell; $SC = $WS.CreateShortcut('%START_MENU_DIR%\\%APP_NAME%.lnk'); $SC.TargetPath = '%INSTALL_DIR%\\%SAFE_NAME%.html'; $SC.WorkingDirectory = '%INSTALL_DIR%'; $SC.Save()"
 
-echo %APP_NAME% installed successfully!`;
+echo %APP_NAME% installed successfully!
+pause
+`;
             this.triggerDownload(safeName + '_install.bat', installerScript, 'application/bat');
         },
 
         // ============================================================
         //  UTILITY FUNCTIONS
         // ============================================================
-        escapeHTML: function (str) { return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); },
-        escapeJS: function (str) { return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"'); },
-        utf8ToBase64: function (str) { const bytes = new TextEncoder().encode(str); let binary = ''; bytes.forEach(function (b) { binary += String.fromCharCode(b); }); return btoa(binary); }
+        escapeHTML: function (str) {
+            return String(str).replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        },
+
+        escapeJS: function (str) {
+            return String(str).replace(/\\/g, '\\\\')
+                .replace(/'/g, "\\'")
+                .replace(/"/g, '\\"');
+        },
+
+        utf8ToBase64: function (str) {
+            const bytes = new TextEncoder().encode(str);
+            let binary = '';
+            bytes.forEach(b => binary += String.fromCharCode(b));
+            return btoa(binary);
+        },
+
+        showToast: function (message, type = 'info') {
+            if (typeof window !== 'undefined' && window.Toast && window.Toast.show) {
+                window.Toast.show(message, type);
+            } else {
+                console.log(`[ProbeCompiler] ${type.toUpperCase()}: ${message}`);
+            }
+        }
     };
 
-    console.log('[ProbeCompiler] Singleton initialized and ready.');
+    console.log('[ProbeCompiler] Singleton initialized and ready (v1.2.0).');
 })();
